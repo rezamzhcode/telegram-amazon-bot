@@ -58,7 +58,6 @@ message = (
     f"🛃 گمرک: {CUSTOMS_PERCENT}%\n"
     f"🏁 قیمت تقریبی به ریال: {int(total_irr):,} ریال"
 )
-
 await update.message.reply_text(message)
 
 if __name__ == "__main__":
