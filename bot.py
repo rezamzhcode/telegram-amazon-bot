@@ -1,86 +1,131 @@
 import os
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+import re
 import httpx
-from lxml import html
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 load_dotenv()
-
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# ثابت‌ها برای محاسبه ریال
-SHIPPING_FLAT_AED = 15
-CUSTOMS_PERCENT = 8
-SERVICE_FEE_PERCENT = 5
-AED_TO_IRR_MANUAL = 150000  # اگر نرخ سایت خراب بود، این مقدار استفاده می‌شود
+AED_SOURCE_URL = "https://www.tgju.org/profile/price_aed"
 
+# --- گرفتن نرخ لحظه‌ای درهم ---
+async def get_aed_price():
+    async with httpx.AsyncClient() as client:
+        r = await client.get(AED_SOURCE_URL)
+        soup = BeautifulSoup(r.text, "lxml")
+        price_el = soup.select_one("td.text-left")
+        if price_el:
+            price_str = price_el.text.strip().replace(",", "")
+            return float(price_str)
+    return None
+
+# --- گرفتن قیمت و وزن محصول از آمازون ---
+async def get_amazon_info(url):
+    # تبدیل دامنه به amazon.ae
+    url = re.sub(r"amazon\.(eu|com)", "amazon.ae", url)
+
+    async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}) as client:
+        r = await client.get(url, follow_redirects=True)
+        soup = BeautifulSoup(r.text, "lxml")
+
+        # قیمت محصول
+        price_el = soup.select_one(".a-price .a-offscreen")
+        price = None
+        if price_el:
+            price_str = price_el.text.strip().replace("AED", "").replace(",", "").strip()
+            try:
+                price = float(price_str)
+            except:
+                pass
+
+        # وزن محصول
+        weight = None
+        # بخش مشخصات محصول
+        for row in soup.select("table tr"):
+            header = row.select_one("th")
+            cell = row.select_one("td")
+            if header and cell and "weight" in header.text.lower():
+                weight_str = cell.text.strip().lower()
+                weight = parse_weight(weight_str)
+                break
+
+        return price, weight
+
+# --- تبدیل متن وزن به کیلوگرم ---
+def parse_weight(weight_str):
+    match = re.search(r"([\d\.]+)\s*(kg|g)", weight_str)
+    if match:
+        value = float(match.group(1))
+        unit = match.group(2)
+        if unit == "g":
+            value = value / 1000
+        return value
+    return None
+
+# --- محاسبه هزینه ---
+def calculate_total(price_aed, aed_to_irr, weight_kg):
+    shipping_aed = 15  # هزینه ثابت ارسال
+    customs_percent = 8
+    service_fee_percent = 5
+
+    # اضافه بار
+    extra_charge_irr = 0
+    if weight_kg and weight_kg > 50:
+        extra_kg = weight_kg - 50
+        extra_blocks = int(extra_kg // 50) + (1 if extra_kg % 50 > 0 else 0)
+        extra_charge_irr = extra_blocks * 500_000  # 500 هزار تومان به ازای هر 50 کیلو
+
+    subtotal_aed = price_aed + shipping_aed
+    subtotal_aed += subtotal_aed * customs_percent / 100
+    subtotal_aed += subtotal_aed * service_fee_percent / 100
+
+    total_irr = subtotal_aed * aed_to_irr + extra_charge_irr
+    return total_irr, extra_charge_irr
+
+# --- هندلر استارت ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "سلام 😎\n"
-        "میخوای بدونی قیمت محصول آمازون دبی چنده و هزینه‌هاش چطور میشه؟\n"
-        "فقط لینک محصول رو برام بفرست تا برات همه چیز رو حساب کنم 💰📦"
+        "سلام 👋\nلینک محصول آمازون دبی رو بفرست تا قیمت و هزینه نهایی رو برات حساب کنم."
     )
 
+# --- هندلر پیام ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
-    
-    # گرفتن قیمت محصول از آمازون
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url)
-            tree = html.fromstring(resp.text)
-
-        price_el = tree.xpath('//span[@class="a-price-whole"]/text()')
-        if not price_el or price_el[0].strip() == '':
-            await update.message.reply_text(
-                "اوپس 😅، قیمت محصول پیدا نشد! مطمئن شو لینک آمازون دبی است و دوباره امتحان کن."
-            )
-            return
-
-        price_aed = float(price_el[0].replace(",", "").strip())
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ خطا در گرفتن قیمت: {e}")
+    if not url.startswith("http"):
+        await update.message.reply_text("لطفاً لینک معتبر بفرست 📎")
         return
 
-    # گرفتن نرخ درهم از TGJU (لحظه‌ای)
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get("https://www.tgju.org/profile/price_aed")
-            tree = html.fromstring(resp.text)
-        
-        rate_el = tree.xpath('//td[@class="text-left"]/text()')
-        if not rate_el or rate_el[0].strip() == '':
-            rate = AED_TO_IRR_MANUAL
-        else:
-            rate = float(rate_el[0].replace(",", "").strip())
-    except:
-        rate = AED_TO_IRR_MANUAL
+    await update.message.reply_text("⏳ در حال پردازش لینک...")
 
-    # محاسبه هزینه‌ها
-    shipping_aed = SHIPPING_FLAT_AED
-    customs_fee = (price_aed + shipping_aed) * CUSTOMS_PERCENT / 100
-    service_fee = (price_aed + shipping_aed) * SERVICE_FEE_PERCENT / 100
-    total_aed = price_aed + shipping_aed + customs_fee + service_fee
-    total_irr = total_aed * rate
+    aed_price = await get_aed_price()
+    if not aed_price:
+        await update.message.reply_text("❌ خطا در دریافت نرخ لحظه‌ای درهم.")
+        return
 
-    # ارسال پیام جزئیات
-    message = (
-        f"💱 نرخ درهم (لحظه‌ای): {rate:,} ریال\n"
-        f"🛒 قیمت کالا: {price_aed} AED\n"
-        f"📦 هزینه ارسال: {shipping_aed} AED\n"
-        f"💰 درصد کارمزد: {SERVICE_FEE_PERCENT}%\n"
-        f"🛃 گمرک: {CUSTOMS_PERCENT}%\n"
-        f"🏁 قیمت تقریبی به ریال: {int(total_irr):,} ریال"
-    )
+    product_price_aed, weight_kg = await get_amazon_info(url)
+    if not product_price_aed:
+        await update.message.reply_text("❌ نتونستم قیمت محصول رو پیدا کنم.")
+        return
 
-    await update.message.reply_text(message)
+    total_irr, extra_charge_irr = calculate_total(product_price_aed, aed_price, weight_kg)
+
+    msg = f"💰 نرخ لحظه‌ای درهم: {aed_price:,.0f} تومان\n"
+    msg += f"📦 قیمت محصول: {product_price_aed} AED\n"
+    if weight_kg:
+        msg += f"⚖️ وزن محصول: {weight_kg} kg\n"
+    if extra_charge_irr > 0:
+        msg += f"📦 هزینه اضافه بار: {extra_charge_irr:,.0f} تومان\n"
+    msg += f"💵 قیمت نهایی: {total_irr:,.0f} تومان"
+
+    await update.message.reply_text(msg)
+
+# --- راه‌اندازی ربات ---
+app = ApplicationBuilder().token(BOT_TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
 if __name__ == "__main__":
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    print("Bot is running...")
     app.run_polling()
