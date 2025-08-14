@@ -41,24 +41,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"⚠️ خطا در گرفتن قیمت: {e}")
         return
 
-    # گرفتن نرخ درهم از TGJU
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get("https://www.tgju.org/profile/price_aed")
-            tree = html.fromstring(resp.text)
-        
-        rate_el = tree.xpath('//div[@class="profile-price"]/span[@class="value"]/text()')
-        if not rate_el or rate_el[0].strip() == '':
-            rate = AED_TO_IRR_MANUAL
-        else:
-            rate = float(rate_el[0].replace(",", "").strip())
-    except:
-        rate = AED_TO_IRR_MANUAL
+   # محاسبه هزینه‌ها
+shipping_aed = SHIPPING_FLAT_AED
+customs_fee = (price_aed + shipping_aed) * CUSTOMS_PERCENT / 100
+service_fee = (price_aed + shipping_aed) * SERVICE_FEE_PERCENT / 100
 
-    # محاسبه ریال
-    total_irr = (price_aed + SHIPPING_FLAT_AED) * (1 + CUSTOMS_PERCENT/100 + SERVICE_FEE_PERCENT/100) * rate
+total_aed = price_aed + shipping_aed + customs_fee + service_fee
+total_irr = total_aed * rate
 
-    await update.message.reply_text(f"💰 قیمت تقریبی به ریال: {int(total_irr):,} ریال")
+# ارسال پیام جزئیات
+message = (
+    f"💱 نرخ درهم: {rate:,} ریال\n"
+    f"🛒 قیمت کالا: {price_aed} AED\n"
+    f"📦 هزینه ارسال: {shipping_aed} AED\n"
+    f"💰 درصد کارمزد: {SERVICE_FEE_PERCENT}%\n"
+    f"🛃 گمرک: {CUSTOMS_PERCENT}%\n"
+    f"🏁 قیمت تقریبی به ریال: {int(total_irr):,} ریال"
+)
+
+await update.message.reply_text(message)
 
 if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
