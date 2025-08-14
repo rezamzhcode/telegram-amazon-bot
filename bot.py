@@ -13,11 +13,13 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 SHIPPING_FLAT_AED = 15
 CUSTOMS_PERCENT = 8
 SERVICE_FEE_PERCENT = 5
-AED_TO_IRR_MANUAL = 150000  # نرخ دستی درهم به ریال
+AED_TO_IRR_MANUAL = 150000  # اگر نرخ سایت خراب بود، این مقدار استفاده می‌شود
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "سلام! لینک محصول آمازون دبی را ارسال کنید تا قیمتش به ریال محاسبه شود."
+        "سلام 😎\n"
+        "میخوای بدونی قیمت محصول آمازون دبی چنده و هزینه‌هاش چطور میشه؟\n"
+        "فقط لینک محصول رو برام بفرست تا برات همه چیز رو حساب کنم 💰📦"
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -32,7 +34,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         price_el = tree.xpath('//span[@class="a-price-whole"]/text()')
         if not price_el or price_el[0].strip() == '':
             await update.message.reply_text(
-                "⚠️ قیمت محصول پیدا نشد. لطفاً مطمئن شوید لینک آمازون دبی است."
+                "اوپس 😅، قیمت محصول پیدا نشد! مطمئن شو لینک آمازون دبی است و دوباره امتحان کن."
             )
             return
 
@@ -41,13 +43,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"⚠️ خطا در گرفتن قیمت: {e}")
         return
 
-    # گرفتن نرخ درهم از TGJU
+    # گرفتن نرخ درهم از TGJU (لحظه‌ای)
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.get("https://www.tgju.org/profile/price_aed")
             tree = html.fromstring(resp.text)
         
-        rate_el = tree.xpath('//div[@class="profile-price"]/span[@class="value"]/text()')
+        rate_el = tree.xpath('//td[@class="text-left"]/text()')
         if not rate_el or rate_el[0].strip() == '':
             rate = AED_TO_IRR_MANUAL
         else:
@@ -64,7 +66,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ارسال پیام جزئیات
     message = (
-        f"💱 نرخ درهم: {rate:,} ریال\n"
+        f"💱 نرخ درهم (لحظه‌ای): {rate:,} ریال\n"
         f"🛒 قیمت کالا: {price_aed} AED\n"
         f"📦 هزینه ارسال: {shipping_aed} AED\n"
         f"💰 درصد کارمزد: {SERVICE_FEE_PERCENT}%\n"
