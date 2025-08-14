@@ -1,5 +1,5 @@
-import re
 import os
+import re
 import httpx
 from bs4 import BeautifulSoup
 from telegram import Update
@@ -9,38 +9,36 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-AED_TO_IRR_MANUAL = int(os.getenv("AED_TO_IRR_MANUAL", 150000))
 SHIPPING_FLAT_AED = float(os.getenv("SHIPPING_FLAT_AED", 15))
 CUSTOMS_PERCENT = float(os.getenv("CUSTOMS_PERCENT", 10))
 SERVICE_FEE_PERCENT = float(os.getenv("SERVICE_FEE_PERCENT", 10))
-EXTRA_FIXED_IRR = int(os.getenv("EXTRA_FIXED_IRR", 0))
-
+EXTRA_PER_50KG_IRR = int(os.getenv("EXTRA_PER_50KG_IRR", 500_000))
 MAX_WEIGHT_KG = 50
-EXTRA_PER_50KG_IRR = 500_000  # 500 هزار تومان
+AED_TO_IRR_MANUAL = int(os.getenv("AED_TO_IRR_MANUAL", 150000))
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("سلام! لطفاً لینک محصول آمازون دبی خود را ارسال کنید.")
 
 def fix_amazon_link(url: str) -> str:
-    # تبدیل eu به ae
-    url = url.replace("amazon.ae", "amazon.ae").replace("amazon.eu", "amazon.ae")
+    """لینک EU را به AE تبدیل می‌کند."""
+    url = url.replace(".eu", ".ae")
     return url
 
 async def get_aed_to_irr() -> int:
+    """نرخ لحظه‌ای درهم از سایت TGJU."""
     try:
-        url = "https://www.tgju.org/profile/price_aed"
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url)
+            resp = await client.get("https://www.tgju.org/profile/price_aed")
             soup = BeautifulSoup(resp.text, "lxml")
             td = soup.find("td", class_="text-left")
             if td:
-                value = int(td.text.replace(",", "").strip())
-                return value
-    except Exception as e:
-        print("Error fetching AED rate:", e)
+                return int(td.text.replace(",", "").strip())
+    except:
+        pass
     return AED_TO_IRR_MANUAL
 
 async def parse_amazon_product(url: str) -> dict:
+    """قیمت و وزن محصول را از صفحه آمازون استخراج می‌کند."""
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
         soup = BeautifulSoup(resp.text, "lxml")
@@ -48,12 +46,13 @@ async def parse_amazon_product(url: str) -> dict:
         price_tag = soup.find("span", class_="a-price-whole")
         price = float(price_tag.text.replace(",", "")) if price_tag else None
         # وزن
-        weight_tag = soup.find(text=re.compile(r"Weight|وزن|وزن کالا"))
         weight = 0
-        if weight_tag:
-            match = re.search(r"([\d,.]+)\s*kg", weight_tag, re.IGNORECASE)
+        text_elements = soup.find_all(text=re.compile(r"(Weight|وزن)"))
+        for t in text_elements:
+            match = re.search(r"([\d,.]+)\s*kg", t, re.IGNORECASE)
             if match:
                 weight = float(match.group(1).replace(",", "."))
+                break
         return {"price_aed": price, "weight_kg": weight}
 
 def calculate_final(price_aed, weight_kg, aed_to_irr):
@@ -64,7 +63,7 @@ def calculate_final(price_aed, weight_kg, aed_to_irr):
     if weight_kg > MAX_WEIGHT_KG:
         extra_units = int((weight_kg - MAX_WEIGHT_KG) / MAX_WEIGHT_KG) + 1
         extra_weight_irr = extra_units * EXTRA_PER_50KG_IRR
-    total = price_aed * aed_to_irr + shipping_irr + customs_irr + service_irr + extra_weight_irr + EXTRA_FIXED_IRR
+    total = price_aed * aed_to_irr + shipping_irr + customs_irr + service_irr + extra_weight_irr
     return {
         "total_toman": total // 10,
         "shipping_toman": shipping_irr // 10,
@@ -102,6 +101,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response)
 
 if __name__ == "__main__":
+    # استفاده از polling امن برای Railway و جلوگیری از Conflict
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
