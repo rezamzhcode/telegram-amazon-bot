@@ -59,7 +59,6 @@ message = (
     f"🏁 قیمت تقریبی به ریال: {int(total_irr):,} ریال"
 )
 await update.message.reply_text(message)
-
 if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     
