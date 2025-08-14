@@ -6,7 +6,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # توکن جدیدت رو اینجا بذار
-BOT_TOKEN = "توکن_جدید_تو_اینجا"
+BOT_TOKEN = "8259083093:AAEY2dpAm0uPo27x49Ee81QidTEGNJmEVNo"
 
 # تبدیل لینک EU به AE
 def convert_link(url: str) -> str:
